@@ -1,51 +1,99 @@
 /* Styles for the spending drill-down report (main/index view), ported from
-   the legacy finalysis.py PAGE constant. */
+   the legacy finalysis.py PAGE constant. The palette is restrained: neutral
+   grays with the chart blue (#4a90d9) as the single accent. */
+:root {
+    --bg: #f2f4f7;
+    --card-bg: #ffffff;
+    --text: #1f2937;
+    --text-secondary: #4b5563;
+    --text-muted: #6b7280;
+    --text-faint: #9ca3af;
+    --border: #e5e7eb;
+    --border-soft: #edf0f4;
+    --accent: #4a90d9;
+    --row-hover: #f4f7fb;
+    --row-hover-blue: #eef4fb;
+    --refund: #2e7d32;
+}
+
 * { box-sizing: border-box; }
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
                  "Helvetica Neue", Arial, sans-serif;
-    background: #f0f2f5;
-    color: #1a1a2e;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
     padding: 2em;
     margin: 0;
     font-variant-numeric: tabular-nums;
 }
 .card {
-    background: #fff;
+    background: var(--card-bg);
     border-radius: 12px;
-    padding: 1.5em 2em;
+    padding: 1.5em;
     margin-bottom: 1em;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.07);
-    /* The card is the grid container for the drilldown rows */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
 }
 h1 {
-    font-size: 1.35em;
-    font-weight: 600;
-    margin: 0 0 0.6em;
-    color: #111;
+    font-size: 1.3em;
+    font-weight: 650;
+    margin: 0 0 0.8em;
 }
 .summary-header {
     display: flex;
-    gap: 2.5em;
+    gap: 3em;
     flex-wrap: wrap;
-    padding-bottom: 0.8em;
-    border-bottom: 1px solid #e8eaed;
-    margin-bottom: 0.6em;
+    padding-bottom: 0.9em;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1em;
 }
 .summary-item {
     display: flex;
     flex-direction: column;
-    gap: 0.15em;
+    gap: 0.2em;
 }
 .summary-label {
-    font-size: 0.75em;
+    font-size: 0.72em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #888;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
 }
 .summary-value {
-    font-size: 1.15em;
-    font-weight: 600;
+    font-size: 1.2em;
+    font-weight: 650;
+}
+
+/* ==== monthly chart ==== */
+/* The height is fixed and maintainAspectRatio is off in the Chart.js init,
+   so the canvas fills the container instead of dictating the layout. */
+.chart-container {
+    position: relative;
+    height: 300px;
+    margin-top: 1.2em;
+}
+
+/* ==== two-column main area (tree + sidebar) ==== */
+.main-area {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 1em;
+    align-items: start;
+}
+.sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+}
+/* The card margin is for cards stacked in the main column; the sidebar's
+   flex gap already separates its cards, so drop it there to avoid double
+   spacing between the blocks. */
+.sidebar > .card {
+    margin-bottom: 0;
+}
+@media (max-width: 900px) {
+    .main-area {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* ==== details / summary reset and grid rows ==== */
@@ -56,45 +104,63 @@ details {
     transition: border-color 0.15s;
 }
 details[open] {
-    border-left-color: #e5e7eb;
+    border-left-color: var(--border);
 }
 details[open] > details {
     /* Nested open details also show their border */
-    border-left-color: #e5e7eb;
+    border-left-color: var(--border);
 }
 
 summary {
     display: grid;
     grid-template-columns: 1.2em 1fr 7em minmax(0, 35%);
     align-items: center;
-    gap: 0.4em;
+    gap: 0.5em;
     cursor: pointer;
-    padding: 0.25em 0.4em;
-    border-radius: 4px;
+    padding: 0.3em 0.5em;
+    border-radius: 6px;
     list-style: none;
     outline: none;
+    transition: background-color 0.12s ease;
 }
 summary::-webkit-details-marker { display: none; }
 summary::before {
     content: "▸";
-    color: #999;
+    color: var(--text-faint);
     font-size: 0.8em;
     text-align: center;
-    transition: transform 0.15s;
+    transition: transform 0.15s, color 0.12s;
     grid-column: 1;
     grid-row: 1;
 }
 details[open] > summary::before {
     content: "▾";
 }
-summary:hover { background: #f6f8fb; }
+summary:hover { background: var(--row-hover); }
+summary:hover::before { color: var(--accent); }
+summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
 
-/* typographic hierarchy */
-.row-year .row-label { font-size: 1.1em; font-weight: 600; }
-.row-quarter .row-label { font-size: 1.05em; font-weight: 600; }
-.row-month .row-label { font-weight: 500; }
-.row-day .row-label { font-size: 0.93em; color: #444; }
-.refund-row .row-label { color: #2e7d32; }
+/* Year rows have no bar track, so they only need the marker, label, and
+   amount columns; the global chart above the tree shows the trend instead.
+   The template still matches the month/day rows so amounts stay in one
+   column; the fourth track is simply left empty. */
+summary.row-year {
+    grid-template-columns: 1.2em 1fr 7em minmax(0, 35%);
+}
+
+/* typographic hierarchy: year strongest, then month, day, transactions */
+.row-year .row-label { font-size: 1.05em; font-weight: 650; }
+.row-year .row-amount { font-weight: 600; }
+.row-month .row-label { font-size: 1em; font-weight: 600; }
+.row-day .row-label {
+    font-size: 0.92em;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.refund-row .row-label { color: var(--refund); }
 
 .row-label {
     grid-column: 2;
@@ -115,43 +181,44 @@ summary:hover { background: #f6f8fb; }
     grid-row: 1;
     height: 0.7em;
     min-width: 0;
-    background: #eef1f5;
+    background: var(--border-soft);
     border-radius: 4px;
     overflow: hidden;
 }
 .bar {
     display: block;
     height: 100%;
-    background: #4a90d9;
+    background: var(--accent);
     border-radius: 4px;
 }
 
-/* ==== top merchants (inside month, above days) ==== */
-.top-merchants {
-    margin: 0.4em 0 0.6em;
-    padding: 0.6em 0.8em;
-    background: #f8f9fb;
+/* ==== sidebar blocks (top merchants, spending by tag) ==== */
+.sidebar-block {
+    margin: 0;
+    padding: 0.7em 0.8em;
+    background: #f7f9fc;
     border-radius: 8px;
-    border: 1px solid #edf0f4;
+    border: 1px solid var(--border-soft);
 }
-.top-merchants-title {
-    font-size: 0.78em;
+.sidebar-block-title {
+    font-size: 0.72em;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #999;
-    margin-bottom: 0.5em;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 0.6em;
 }
 .merchant-row {
     display: grid;
-    grid-template-columns: 1fr auto 7em minmax(0, 30%);
+    grid-template-columns: minmax(0, 1fr) auto minmax(4.5em, auto) minmax(0, 16%);
     align-items: center;
     gap: 0.4em;
-    padding: 0.12em 0.3em;
+    padding: 0.16em 0.3em;
     font-size: 0.88em;
-    border-radius: 3px;
+    border-radius: 4px;
+    transition: background-color 0.12s ease;
 }
-.merchant-row:hover { background: #eef1f7; }
+.merchant-row:hover { background: var(--row-hover-blue); }
 .merchant-name {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -159,16 +226,18 @@ summary:hover { background: #f6f8fb; }
     min-width: 0;
 }
 .merchant-count {
-    width: 4ch;
-    text-align: center;
-    color: #aaa;
-    font-size: 0.85em;
-    flex-shrink: 0;
+    min-width: 4ch;
+    text-align: right;
+    color: var(--text-faint);
+    font-size: 0.8em;
 }
 .merchant-amount {
     text-align: right;
-    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
+/* Sidebar bars are slimmer because their rows are denser. */
+.sidebar .bar-track { height: 0.55em; }
 
 /* ==== transaction list inside expanded days ==== */
 .txn-list {
@@ -179,13 +248,14 @@ summary:hover { background: #f6f8fb; }
     grid-template-columns: 1fr 7em;
     align-items: baseline;
     gap: 0.4em;
-    padding: 0.15em 0.4em;
+    padding: 0.18em 0.5em;
     font-size: 0.88em;
-    color: #555;
-    border-radius: 3px;
+    color: var(--text-secondary);
+    border-radius: 4px;
+    transition: background-color 0.12s ease;
 }
 .txn-row:nth-child(even) { background: #fafbfc; }
-.txn-row:hover { background: #f0f4ff; }
+.txn-row:hover { background: var(--row-hover-blue); }
 .txn-desc {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -197,4 +267,4 @@ summary:hover { background: #f6f8fb; }
     text-align: right;
     font-variant-numeric: tabular-nums;
 }
-.txn-amount.refund { color: #2e7d32; }
+.txn-amount.refund { color: var(--refund); }

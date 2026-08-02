@@ -11,6 +11,9 @@ from main.models import NormalizationRule
 from main.models import Tag
 from main.models import Transaction
 from main.views import build_tree
+from main.views import monthly_series
+from main.views import tag_totals
+from main.views import top_merchants
 
 _CSV_HEADER = "Details,Posting Date,Description,Amount,Type,Balance,Check or Slip #\n"
 
@@ -46,6 +49,10 @@ class IndexViewTests(TestCase):
         self.assertContains(response, "SOME MERCHANT")
         self.assertNotContains(response, "KASSANDRA")
         self.assertNotContains(response, "ACCT XFER")
+        # The chart data pins the month total too: one month, one (label,
+        # total) point serialized via json_script.
+        self.assertContains(response, "Jul 2026")
+        self.assertContains(response, '"Jul 2026", 10.5')
 
     def test_index_shows_spending_by_tag(self) -> None:
         tagged = Merchant.objects.create(name="COFFEE SHOP")
@@ -82,7 +89,10 @@ class IndexViewTests(TestCase):
         self.assertContains(response, "&lt;b&gt;EVIL&lt;/b&gt;")
         self.assertContains(response, "&lt;script&gt;")
         self.assertNotContains(response, "<b>EVIL</b>")
-        self.assertNotContains(response, "<script>")
+        # The raw payload must not appear unescaped. (The page legitimately
+        # contains <script> tags for Chart.js and the chart init, so the
+        # assertion targets the full payload rather than the tag alone.)
+        self.assertNotContains(response, "<script>alert('x')</script>")
 
     def test_index_empty_db_renders_zero_totals(self) -> None:
         Transaction.objects.all().delete()
@@ -94,7 +104,30 @@ class IndexViewTests(TestCase):
 
 
 class BuildTreeTests(TestCase):
-    def test_tag_totals_with_multi_tag_and_untagged(self) -> None:
+    def test_day_transactions_sorted_by_descending_amount(self) -> None:
+        transactions = [
+            (date(2026, 7, 1), "CAFE", Decimal("10.00")),
+            (date(2026, 7, 1), "REFUNDS", Decimal("-5.00")),
+            (date(2026, 7, 1), "BOOKS", Decimal("4.00")),
+            (date(2026, 7, 1), "MARKET", Decimal("12.00")),
+        ]
+        tree = build_tree(transactions)
+        month = tree[2026][7]
+        # Total pinning: the month total is the sum of all its transactions.
+        self.assertEqual(month["total"], Decimal("21.00"))
+        self.assertEqual(month["days"][1]["total"], Decimal("21.00"))
+        # Refunds (negative amounts) sort last, after descending spends.
+        self.assertEqual(
+            month["days"][1]["txns"],
+            [
+                ("MARKET", Decimal("12.00")),
+                ("CAFE", Decimal("10.00")),
+                ("BOOKS", Decimal("4.00")),
+                ("REFUNDS", Decimal("-5.00")),
+            ],
+        )
+
+    def test_tag_totals_count_multi_tag_merchants_fully(self) -> None:
         transactions = [
             (date(2026, 7, 1), "CAFE", Decimal("10.00")),
             (date(2026, 7, 2), "CAFE", Decimal("4.00")),
@@ -103,15 +136,12 @@ class BuildTreeTests(TestCase):
         # A merchant with several tags counts fully under each of them, so
         # CAFE's $14 shows up under both tags.
         merchant_tags = {"CAFE": ["Food", "Lunch"]}
-        tree = build_tree(transactions, merchant_tags)
-        month = tree[2026]["Q3"][7]
-        self.assertEqual(month["tags"]["Food"], {"total": Decimal("14.00"), "count": 2})
-        self.assertEqual(
-            month["tags"]["Lunch"], {"total": Decimal("14.00"), "count": 2}
-        )
+        by_tag = tag_totals(transactions, merchant_tags)
+        self.assertIn(("Food", Decimal("14.00"), 2), by_tag)
+        self.assertIn(("Lunch", Decimal("14.00"), 2), by_tag)
         # BOOKS is absent from the map, so it lands in the untagged bucket,
         # keyed by the None sentinel.
-        self.assertEqual(month["tags"][None], {"total": Decimal("6.00"), "count": 1})
+        self.assertIn((None, Decimal("6.00"), 1), by_tag)
 
     def test_real_untagged_tag_does_not_collide_with_untagged_bucket(self) -> None:
         transactions = [
@@ -121,12 +151,34 @@ class BuildTreeTests(TestCase):
         # A user-created tag named "untagged" must stay its own bucket, kept
         # apart from the None sentinel for merchants without tags.
         merchant_tags = {"CAFE": ["untagged"]}
-        tree = build_tree(transactions, merchant_tags)
-        month = tree[2026]["Q3"][7]
+        by_tag = tag_totals(transactions, merchant_tags)
+        self.assertIn(("untagged", Decimal("10.00"), 1), by_tag)
+        self.assertIn((None, Decimal("6.00"), 1), by_tag)
+
+    def test_top_merchants_caps_at_15_by_total(self) -> None:
+        transactions = [
+            (date(2026, 7, 1), f"MERCHANT {i}", Decimal(f"{i + 1}.00"))
+            for i in range(20)
+        ]
+        top = top_merchants(transactions)
+        self.assertEqual(len(top), 15)
+        # The highest spenders rank first with their totals and counts.
+        self.assertEqual(top[0], ("MERCHANT 19", Decimal("20.00"), 1))
+
+    def test_monthly_series_zero_fills_gap_months(self) -> None:
+        transactions = [
+            (date(2026, 1, 1), "CAFE", Decimal("10.00")),
+            (date(2026, 3, 5), "BOOKS", Decimal("6.00")),
+        ]
+        series = monthly_series(transactions)
         self.assertEqual(
-            month["tags"]["untagged"], {"total": Decimal("10.00"), "count": 1}
+            series,
+            [
+                ("Jan 2026", 10.0),
+                ("Feb 2026", 0.0),
+                ("Mar 2026", 6.0),
+            ],
         )
-        self.assertEqual(month["tags"][None], {"total": Decimal("6.00"), "count": 1})
 
 
 class ImportTransactionsCommandTests(TestCase):

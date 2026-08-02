@@ -22,6 +22,61 @@
         </div>
     </div>
 
-    {{ tree_html|safe }}
+    {{ chart_data|json_script:"monthly-chart-data" }}
+    <div class="chart-container">
+        <canvas id="monthly-chart"></canvas>
+    </div>
 </div>
+
+<div class="main-area">
+    <div class="card">
+        {{ tree_html|safe }}
+    </div>
+    <aside class="sidebar">
+        {% if sidebar_merchants_html %}
+        <div class="card">{{ sidebar_merchants_html|safe }}</div>
+        {% endif %}
+        {% if sidebar_tags_html %}
+        <div class="card">{{ sidebar_tags_html|safe }}</div>
+        {% endif %}
+    </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js" integrity="sha512-Y51n9mtKTVBh3Jbx5pZSJNDDMyY+yGe77DGtBPzRlgsf/YLCh13kSZ3JmfHGzYFCmOndraf0sQgfM654b7dJ3w==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+(function () {
+    const series = JSON.parse(document.getElementById("monthly-chart-data").textContent);
+    new Chart(document.getElementById("monthly-chart"), {
+        type: "bar",
+        data: {
+            labels: series.map((point) => point[0]),
+            datasets: [{
+                label: "Spending",
+                data: series.map((point) => point[1]),
+                backgroundColor: "#4a90d9",
+            }],
+        },
+        options: {
+            maintainAspectRatio: false,
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: (item) => "$" + item.parsed.y.toLocaleString("en-US", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                        }),
+                    },
+                },
+            },
+            scales: {
+                y: {
+                    ticks: {
+                        callback: (value) => "$" + value.toLocaleString("en-US"),
+                    },
+                },
+            },
+        },
+    });
+})();
+</script>
 {% endblock %}
