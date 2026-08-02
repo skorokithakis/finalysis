@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}{{ month_name }}{% endblock %}
+
+{% block content %}
+<div class="main-area">
+    <div class="card">
+        <div class="month-header">
+            <a class="back-link" href="{% url "main:index" %}">← All months</a>
+            <h1>{{ month_name }}</h1>
+        </div>
+        <div class="summary-header">
+            <div class="summary-item">
+                <span class="summary-label">Month total</span>
+                <span class="summary-value">{{ month_total }}</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Transactions</span>
+                <span class="summary-value">{{ txn_count }}</span>
+            </div>
+        </div>
+
+        {{ chart_data|json_script:"day-chart-data" }}
+        <div class="chart-container">
+            <canvas id="day-chart"></canvas>
+        </div>
+
+        <div id="day-txns" class="day-txns" hidden>
+            <h2 id="day-txns-title"></h2>
+            <div id="day-txns-list"></div>
+        </div>
+    </div>
+
+    <aside class="sidebar">
+        {% if sidebar_merchants_html %}
+        <div class="card">{{ sidebar_merchants_html|safe }}</div>
+        {% endif %}
+        {% if sidebar_tags_html %}
+        <div class="card">{{ sidebar_tags_html|safe }}</div>
+        {% endif %}
+    </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js" integrity="sha512-Y51n9mtKTVBh3Jbx5pZSJNDDMyY+yGe77DGtBPzRlgsf/YLCh13kSZ3JmfHGzYFCmOndraf0sQgfM654b7dJ3w==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+(function () {
+    const payload = JSON.parse(document.getElementById("day-chart-data").textContent);
+    // The month is 1-based in the payload, so day 0 of the month after it is
+    // the displayed month's last day: that gives the x-axis its length, with
+    // every calendar day present and empty days zero-filled by the map below.
+    const daysInMonth = new Date(payload.year, payload.month, 0).getDate();
+    const labels = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+    const totals = labels.map((day) => payload.days[day] ? payload.days[day].total : 0);
+
+    const txnPanel = document.getElementById("day-txns");
+    const txnTitle = document.getElementById("day-txns-title");
+    const txnList = document.getElementById("day-txns-list");
+
+    function money(value) {
+        return "$" + value.toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        });
+    }
+
+    function pinDay(day) {
+        const dayData = payload.days[day];
+        if (!dayData || dayData.txns.length === 0) {
+            // Clicking an empty day (or the chart background) clears the
+            // pinned list: there are no transactions to show for it.
+            txnPanel.hidden = true;
+            txnList.textContent = "";
+            return;
+        }
+        txnTitle.textContent = new Date(payload.year, payload.month - 1, day)
+            .toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+        // Merchant names are user input, so rows are built with textContent
+        // and createElement, never innerHTML.
+        txnList.textContent = "";
+        for (const [merchant, amount] of dayData.txns) {
+            const row = document.createElement("div");
+            row.className = "txn-row";
+            const name = document.createElement("span");
+            name.className = "txn-desc";
+            name.textContent = merchant;
+            const value = document.createElement("span");
+            value.className = amount < 0 ? "txn-amount refund" : "txn-amount";
+            value.textContent = money(amount);
+            row.append(name, value);
+            txnList.appendChild(row);
+        }
+        txnPanel.hidden = false;
+    }
+
+    new Chart(document.getElementById("day-chart"), {
+        type: "bar",
+        data: {
+            labels: labels,
+            datasets: [{
+                label: "Spending",
+                data: totals,
+                backgroundColor: "#4a90d9",
+                // Near-zero bars keep a 3px sliver, so they stay clickable.
+                minBarLength: 3,
+            }],
+        },
+        options: {
+            maintainAspectRatio: false,
+            onClick: (event, elements, chart) => {
+                // intersect: true makes background clicks return no elements,
+                // so only an actual bar click pins a day.
+                const hits = chart.getElementsAtEventForMode(event, "nearest", { intersect: true }, true);
+                pinDay(hits.length ? hits[0].index + 1 : 0);
+            },
+            onHover: (event, elements) => {
+                // Bars are clickable, so the cursor over them should say so.
+                event.native.target.style.cursor = elements.length ? "pointer" : "default";
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: (item) => {
+                            const dayData = payload.days[item.dataIndex + 1];
+                            const count = dayData ? dayData.count : 0;
+                            return money(item.parsed.y) + " · " + count
+                                + (count === 1 ? " transaction" : " transactions");
+                        },
+                    },
+                },
+            },
+            scales: {
+                y: {
+                    ticks: {
+                        callback: (value) => "$" + value.toLocaleString("en-US"),
+                    },
+                },
+            },
+        },
+    });
+})();
+</script>
+{% endblock %}

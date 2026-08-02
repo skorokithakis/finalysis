@@ -1,4 +1,4 @@
-/* Styles for the spending drill-down report (main/index view), ported from
+/* Styles for the spending report (main index and month views), ported from
    the legacy finalysis.py PAGE constant. The palette is restrained: neutral
    grays with the chart blue (#4a90d9) as the single accent. */
 :root {
@@ -11,7 +11,6 @@
     --border: #e5e7eb;
     --border-soft: #edf0f4;
     --accent: #4a90d9;
-    --row-hover: #f4f7fb;
     --row-hover-blue: #eef4fb;
     --refund: #2e7d32;
 }
@@ -72,7 +71,7 @@ h1 {
     margin-top: 1.2em;
 }
 
-/* ==== two-column main area (tree + sidebar) ==== */
+/* ==== two-column main area (chart + sidebar) ==== */
 .main-area {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 360px;
@@ -94,102 +93,6 @@ h1 {
     .main-area {
         grid-template-columns: 1fr;
     }
-}
-
-/* ==== details / summary reset and grid rows ==== */
-
-details {
-    display: block;
-    border-left: 1px solid transparent;
-    transition: border-color 0.15s;
-}
-details[open] {
-    border-left-color: var(--border);
-}
-details[open] > details {
-    /* Nested open details also show their border */
-    border-left-color: var(--border);
-}
-
-summary {
-    display: grid;
-    grid-template-columns: 1.2em 1fr 7em minmax(0, 35%);
-    align-items: center;
-    gap: 0.5em;
-    cursor: pointer;
-    padding: 0.3em 0.5em;
-    border-radius: 6px;
-    list-style: none;
-    outline: none;
-    transition: background-color 0.12s ease;
-}
-summary::-webkit-details-marker { display: none; }
-summary::before {
-    content: "▸";
-    color: var(--text-faint);
-    font-size: 0.8em;
-    text-align: center;
-    transition: transform 0.15s, color 0.12s;
-    grid-column: 1;
-    grid-row: 1;
-}
-details[open] > summary::before {
-    content: "▾";
-}
-summary:hover { background: var(--row-hover); }
-summary:hover::before { color: var(--accent); }
-summary:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-}
-
-/* Year rows have no bar track, so they only need the marker, label, and
-   amount columns; the global chart above the tree shows the trend instead.
-   The template still matches the month/day rows so amounts stay in one
-   column; the fourth track is simply left empty. */
-summary.row-year {
-    grid-template-columns: 1.2em 1fr 7em minmax(0, 35%);
-}
-
-/* typographic hierarchy: year strongest, then month, day, transactions */
-.row-year .row-label { font-size: 1.05em; font-weight: 650; }
-.row-year .row-amount { font-weight: 600; }
-.row-month .row-label { font-size: 1em; font-weight: 600; }
-.row-day .row-label {
-    font-size: 0.92em;
-    font-weight: 500;
-    color: var(--text-secondary);
-}
-.refund-row .row-label { color: var(--refund); }
-
-.row-label {
-    grid-column: 2;
-    grid-row: 1;
-    padding-left: calc(var(--depth, 0) * 1.5rem);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.row-amount {
-    grid-column: 3;
-    grid-row: 1;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-}
-.bar-track {
-    grid-column: 4;
-    grid-row: 1;
-    height: 0.7em;
-    min-width: 0;
-    background: var(--border-soft);
-    border-radius: 4px;
-    overflow: hidden;
-}
-.bar {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-    border-radius: 4px;
 }
 
 /* ==== sidebar blocks (top merchants, spending by tag) ==== */
@@ -236,13 +139,26 @@ summary.row-year {
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
 }
+/* The bar track sits in the last grid column of each merchant row. */
+.bar-track {
+    grid-column: 4;
+    grid-row: 1;
+    height: 0.7em;
+    min-width: 0;
+    background: var(--border-soft);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.bar {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 4px;
+}
 /* Sidebar bars are slimmer because their rows are denser. */
 .sidebar .bar-track { height: 0.55em; }
 
-/* ==== transaction list inside expanded days ==== */
-.txn-list {
-    margin: 0.2em 0 0.4em;
-}
+/* ==== pinned day transaction list (month page) ==== */
 .txn-row {
     display: grid;
     grid-template-columns: 1fr 7em;
@@ -261,10 +177,39 @@ summary.row-year {
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
-    padding-left: calc(var(--depth, 0) * 1.5rem + 1.2em);
+    padding-left: 1.2em;
 }
 .txn-amount {
     text-align: right;
     font-variant-numeric: tabular-nums;
 }
 .txn-amount.refund { color: var(--refund); }
+
+/* ==== month page: header, back link, pinned day list ==== */
+.month-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8em;
+    margin-bottom: 0.8em;
+}
+/* The header row handles the spacing, so the h1's own margin goes. */
+.month-header h1 { margin: 0; }
+.back-link {
+    font-size: 0.85em;
+    color: var(--accent);
+    text-decoration: none;
+    white-space: nowrap;
+}
+.back-link:hover { text-decoration: underline; }
+/* The pinned day list appears below the chart, separated by a rule. */
+.day-txns {
+    margin-top: 1.2em;
+    padding-top: 1em;
+    border-top: 1px solid var(--border);
+}
+.day-txns h2 {
+    margin: 0 0 0.6em;
+    font-size: 0.95em;
+    font-weight: 600;
+    color: var(--text-secondary);
+}

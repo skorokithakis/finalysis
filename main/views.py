@@ -1,8 +1,9 @@
-"""The index view: the spending drill-down report.
+"""The report views: the index overview and the month page.
 
-Drill-down: year -> month -> day (with individual transactions). A monthly
-bar chart (fed through json_script), a global top-merchants block, and a
-global spending-by-tag block sit above the tree.
+The index shows a monthly bar chart (fed through json_script) whose bars
+link to the month pages, plus global top-merchants and spending-by-tag
+blocks; the month page (/<year>/<month>/) shows a per-day chart whose bars
+pin each day's transaction list, plus month-scoped sidebar blocks.
 
 Spending rule: sum of -amount for rows where counts_as_spending is true; the
 DB stores amounts signed as in the source CSV, so a spend is a negative
@@ -13,8 +14,11 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from django.http import HttpRequest, HttpResponse
+from django.http import Http404
+from django.http import HttpRequest
+from django.http import HttpResponse
 from django.shortcuts import render
+from django.urls import reverse
 from django.utils.html import escape
 
 from main.models import Merchant
@@ -24,16 +28,15 @@ from main.models import Transaction
 # (already cleaned at import), and spend amount (positive means money spent).
 TransactionRow = tuple[date, str, Decimal]
 
-# The tree nests year -> month; a month carries "total" and "days" sub-dicts
-# (see build_tree).
-MonthData = dict[str, Any]
-Tree = dict[int, dict[int, MonthData]]
-
 # Keys of the tag-totals dict: a real tag name, or None as the sentinel for
 # the untagged bucket. None is used rather than a string because a
 # user-created tag literally named "untagged" would silently merge into a
 # string-keyed bucket; the "untagged" label is substituted only at render time.
 TagKey = None | str
+
+# Per-day data for the month page: the day total and its transactions as
+# (merchant_name, amount) pairs, sorted by amount descending.
+DayData = tuple[Decimal, list[tuple[str, Decimal]]]
 
 
 def merchant_tags_map() -> dict[str, list[str]]:
@@ -48,35 +51,6 @@ def merchant_tags_map() -> dict[str, list[str]]:
     ).values_list("name", "tags__name"):
         tags_by_merchant.setdefault(merchant_name, []).append(tag_name)
     return tags_by_merchant
-
-
-def build_tree(transactions: list[TransactionRow]) -> Tree:
-    """Group transactions into a nested tree with daily totals.
-
-    Returns:
-      {year: {month_num: {
-          "total": Decimal,
-          "days": {
-              day_num: {"total": Decimal, "txns": [(merchant_name, amount), ...]},
-          },
-      }}}
-
-    Each day's transactions are sorted by amount descending, so refunds
-    (negative amounts) sort last.
-    """
-    tree: Tree = {}
-    for d, merchant, amount in transactions:
-        year = tree.setdefault(d.year, {})
-        month = year.setdefault(d.month, {"total": Decimal("0"), "days": {}})
-        month["total"] += amount
-        day = month["days"].setdefault(d.day, {"total": Decimal("0"), "txns": []})
-        day["total"] += amount
-        day["txns"].append((merchant, amount))
-    for months in tree.values():
-        for month in months.values():
-            for day in month["days"].values():
-                day["txns"].sort(key=lambda txn: txn[1], reverse=True)
-    return tree
 
 
 def top_merchants(
@@ -124,12 +98,14 @@ def tag_totals(
 
 def monthly_series(
     transactions: list[TransactionRow],
-) -> list[tuple[str, float]]:
-    """Chronological (label, total) pairs for the chart, gaps zero-filled.
+) -> list[tuple[str, float, str]]:
+    """Chronological (label, total, month_url) triples for the chart.
 
     Labels use the "Mon YYYY" form (e.g. "Jan 2026"); months without any
     transactions are included with a total of 0 so the x-axis has no holes.
-    Totals are floats because Chart.js consumes numbers, not Decimals.
+    Totals are floats because Chart.js consumes numbers, not Decimals. The
+    month URL is built server-side with reverse so the client never
+    string-builds it from the label.
     """
     by_month: dict[tuple[int, int], Decimal] = {}
     for d, _, amount in transactions:
@@ -139,13 +115,14 @@ def monthly_series(
         return []
     first = min(by_month)
     last = max(by_month)
-    series: list[tuple[str, float]] = []
+    series: list[tuple[str, float, str]] = []
     year, month = first
     while (year, month) <= last:
         series.append(
             (
                 date(year, month, 1).strftime("%b %Y"),
                 float(by_month.get((year, month), Decimal("0"))),
+                reverse("main:month", args=(year, month)),
             )
         )
         month += 1
@@ -153,6 +130,27 @@ def monthly_series(
             year += 1
             month = 1
     return series
+
+
+def day_breakdown(transactions: list[TransactionRow]) -> dict[int, DayData]:
+    """Group one month's transactions per day, for the month page chart.
+
+    Returns {day_num: (total, [(merchant_name, amount), ...])} with each
+    day's transactions sorted by amount descending, so refunds (negative
+    amounts) sort last, matching the month page's pinned day lists.
+    """
+    txns_by_day: dict[int, list[tuple[str, Decimal]]] = {}
+    for d, merchant, amount in transactions:
+        txns_by_day.setdefault(d.day, []).append((merchant, amount))
+    return {
+        day_num: (
+            # The explicit start keeps the sum Decimal even for a day whose
+            # txns list is empty (impossible here, but mypy cannot see that).
+            sum((amount for _, amount in txns), Decimal("0")),
+            sorted(txns, key=lambda txn: txn[1], reverse=True),
+        )
+        for day_num, txns in txns_by_day.items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -203,92 +201,6 @@ def render_block_html(title: str, rows: list[tuple[str, int, Decimal]]) -> str:
     return "\n".join(parts)
 
 
-def _year_totals(tree: Tree) -> dict[int, Decimal]:
-    return {
-        year: sum(m["total"] for m in months.values()) for year, months in tree.items()
-    }
-
-
-def _month_totals(months: dict[int, MonthData]) -> dict[int, Decimal]:
-    return {m_num: months[m_num]["total"] for m_num in months}
-
-
-def render_tree_html(tree: Tree) -> str:
-    """Walk the tree and produce nested <details>/<summary> HTML.
-
-    The return value is injected into the template with |safe, so every
-    non-literal interpolation (merchant names) must go through escape();
-    anything that slips through unescaped is an XSS hole.
-    """
-    yt = _year_totals(tree)
-
-    parts: list[str] = []
-    for year in sorted(yt):
-        # Year rows deliberately have no bar track: the monthly chart above
-        # the tree already shows the same trend at a glance.
-        parts.append(
-            f'<details style="--depth:0"><summary class="row row-year">'
-            f'<span class="row-label">{year}</span>'
-            f'<span class="row-amount">{fmt(yt[year])}</span>'
-            f"</summary>"
-        )
-
-        months = tree[year]
-        mt = _month_totals(months)
-        max_month = max(mt.values()) if mt else Decimal("0")
-
-        for m_num in sorted(mt):
-            m_data = months[m_num]
-            month_name = date(2000, m_num, 1).strftime("%B")
-            bar = bar_html(mt[m_num], max_month)
-            parts.append(
-                f'<details style="--depth:1"><summary class="row row-month">'
-                f'<span class="row-label">{month_name}</span>'
-                f'<span class="row-amount">{fmt(mt[m_num])}</span>'
-                f"{bar}"
-                f"</summary>"
-            )
-
-            # --- day rows (expandable, with transactions) ---
-            days_dict = m_data["days"]
-            max_day = (
-                max(d["total"] for d in days_dict.values())
-                if days_dict
-                else Decimal("0")
-            )
-            for day_num in sorted(days_dict):
-                day_data = days_dict[day_num]
-                d_total = day_data["total"]
-                bar = bar_html(d_total, max_day)
-                css_class = "row row-day refund-row" if d_total < 0 else "row row-day"
-                parts.append(
-                    f'<details style="--depth:2"><summary class="{css_class}">'
-                    f'<span class="row-label">{m_num}/{day_num}</span>'
-                    f'<span class="row-amount">{fmt(d_total)}</span>'
-                    f"{bar}"
-                    f"</summary>"
-                )
-
-                # Transaction list inside the expanded day.
-                if day_data["txns"]:
-                    parts.append('<div class="txn-list">')
-                    for name, amt in day_data["txns"]:
-                        txn_css = "txn-amount refund" if amt < 0 else "txn-amount"
-                        parts.append(
-                            f'<div class="txn-row">'
-                            f'<span class="txn-desc" title="{escape(name)}">{escape(name)}</span>'
-                            f'<span class="{txn_css}">{fmt(amt)}</span>'
-                            f"</div>"
-                        )
-                    parts.append("</div>")
-                parts.append("</details>")  # day
-
-            parts.append("</details>")  # month
-        parts.append("</details>")  # year
-
-    return "\n".join(parts)
-
-
 def index(request: HttpRequest) -> HttpResponse:
     txns = Transaction.objects.filter(counts_as_spending=True).select_related(
         "merchant"
@@ -302,7 +214,6 @@ def index(request: HttpRequest) -> HttpResponse:
         (t.date, t.merchant.name, -t.amount)
         for t in txns
     ]
-    tree = build_tree(transactions)
 
     # Summary header data.
     grand_total = sum(t[2] for t in transactions)
@@ -355,8 +266,78 @@ def index(request: HttpRequest) -> HttpResponse:
             "date_range": date_range,
             "avg_monthly": fmt(avg_monthly),
             "month_count": len(months_set),
-            "tree_html": render_tree_html(tree),
             "chart_data": monthly_series(transactions),
+            "sidebar_merchants_html": merchants_html,
+            "sidebar_tags_html": tags_html,
+        },
+    )
+
+
+def month(request: HttpRequest, year: int, month: int) -> HttpResponse:
+    """The month page: per-day chart, click-to-pin day transactions, sidebar.
+
+    The transactions are the same (date, merchant, spend) rows the index
+    view builds, filtered to the month; the sidebar blocks reuse the index's
+    aggregators, scoped to that slice.
+    """
+    txns = Transaction.objects.filter(
+        date__year=year, date__month=month, counts_as_spending=True
+    ).select_related("merchant")
+    transactions = [
+        # The DB stores amounts signed as in the CSV, so a spend is a negative
+        # amount; negate to get the positive spend figure the report displays.
+        (t.date, t.merchant.name, -t.amount)
+        for t in txns
+    ]
+    if not transactions:
+        # Months without spending (out-of-range months included) are not part
+        # of the report, so they 404 instead of rendering an empty page.
+        raise Http404(f"No spending in {year}-{month}")
+
+    days = day_breakdown(transactions)
+    # Explicit start keeps the sum Decimal; the 404 above guarantees days is
+    # non-empty, but mypy cannot see that.
+    month_total = sum((total for total, _ in days.values()), Decimal("0"))
+
+    # The chart payload: year/month for the client-side x-axis (every
+    # calendar day, zero-filled) plus per-day totals, transaction counts,
+    # and transaction lists for the click handler. Totals stay Decimal up
+    # to this JSON boundary; Chart.js consumes floats.
+    payload: dict[str, Any] = {
+        "year": year,
+        "month": month,
+        "days": {
+            day_num: {
+                "total": float(total),
+                "count": len(txns),
+                "txns": [[merchant, float(amount)] for merchant, amount in txns],
+            }
+            for day_num, (total, txns) in days.items()
+        },
+    }
+
+    # Sidebar blocks, scoped to this month only. Both lists are always
+    # non-empty here: the 404 above guarantees at least one transaction.
+    merchants_html = render_block_html(
+        "Top merchants",
+        [(name, count, total) for name, total, count in top_merchants(transactions)],
+    )
+    tags_html = render_block_html(
+        "Spending by tag",
+        [
+            ("untagged" if tag is None else tag, count, total)
+            for tag, total, count in tag_totals(transactions, merchant_tags_map())
+        ],
+    )
+
+    return render(
+        request,
+        "month.html",
+        {
+            "month_name": date(year, month, 1).strftime("%B %Y"),
+            "month_total": fmt(month_total),
+            "txn_count": len(transactions),
+            "chart_data": payload,
             "sidebar_merchants_html": merchants_html,
             "sidebar_tags_html": tags_html,
         },

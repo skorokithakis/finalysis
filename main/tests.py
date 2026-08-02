@@ -1,16 +1,19 @@
+import json
 import os
+import re
 import tempfile
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from django.core.management import call_command
+from django.http import HttpResponse
 from django.test import TestCase
 
 from main.models import Merchant
 from main.models import NormalizationRule
 from main.models import Tag
 from main.models import Transaction
-from main.views import build_tree
 from main.views import monthly_series
 from main.views import tag_totals
 from main.views import top_merchants
@@ -49,10 +52,10 @@ class IndexViewTests(TestCase):
         self.assertContains(response, "SOME MERCHANT")
         self.assertNotContains(response, "KASSANDRA")
         self.assertNotContains(response, "ACCT XFER")
-        # The chart data pins the month total too: one month, one (label,
-        # total) point serialized via json_script.
+        # The chart data pins the month total and its month-page URL too:
+        # one month, one (label, total, url) point serialized via json_script.
         self.assertContains(response, "Jul 2026")
-        self.assertContains(response, '"Jul 2026", 10.5')
+        self.assertContains(response, '"Jul 2026", 10.5, "/2026/7/"')
 
     def test_index_shows_spending_by_tag(self) -> None:
         tagged = Merchant.objects.create(name="COFFEE SHOP")
@@ -73,8 +76,8 @@ class IndexViewTests(TestCase):
         self.assertContains(response, ">untagged<")
 
     def test_index_escapes_merchant_and_tag_names(self) -> None:
-        # The tree HTML is injected with |safe, so merchant and tag names must
-        # be escaped in the view, not just in the template.
+        # The sidebar HTML is injected with |safe, so merchant and tag names
+        # must be escaped in the view, not just in the template.
         evil = Merchant.objects.create(name="<b>EVIL</b>")
         evil.tags.add(Tag.objects.create(name="<script>alert('x')</script>"))
         Transaction.objects.create(
@@ -98,35 +101,111 @@ class IndexViewTests(TestCase):
         Transaction.objects.all().delete()
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        # The empty state: zero totals, a placeholder date range, no tree rows.
+        # The empty state: zero totals and a placeholder date range.
         self.assertContains(response, "$0.00")
         self.assertContains(response, "—")
 
 
-class BuildTreeTests(TestCase):
-    def test_day_transactions_sorted_by_descending_amount(self) -> None:
-        transactions = [
-            (date(2026, 7, 1), "CAFE", Decimal("10.00")),
-            (date(2026, 7, 1), "REFUNDS", Decimal("-5.00")),
-            (date(2026, 7, 1), "BOOKS", Decimal("4.00")),
-            (date(2026, 7, 1), "MARKET", Decimal("12.00")),
-        ]
-        tree = build_tree(transactions)
-        month = tree[2026][7]
-        # Total pinning: the month total is the sum of all its transactions.
-        self.assertEqual(month["total"], Decimal("21.00"))
-        self.assertEqual(month["days"][1]["total"], Decimal("21.00"))
-        # Refunds (negative amounts) sort last, after descending spends.
-        self.assertEqual(
-            month["days"][1]["txns"],
-            [
-                ("MARKET", Decimal("12.00")),
-                ("CAFE", Decimal("10.00")),
-                ("BOOKS", Decimal("4.00")),
-                ("REFUNDS", Decimal("-5.00")),
-            ],
+class MonthViewTests(TestCase):
+    """The month drill-down page at /<year>/<month>/."""
+
+    def setUp(self) -> None:
+        merchant = Merchant.objects.create(name="SOME MERCHANT")
+        Transaction.objects.create(
+            date=date(2026, 7, 1),
+            description="  SOME MERCHANT  07/01KASSANDRA  ",
+            merchant=merchant,
+            amount=Decimal("-10.50"),
+            counts_as_spending=True,
+            raw={},
+        )
+        # Transfers are imported but excluded from spending.
+        Transaction.objects.create(
+            date=date(2026, 7, 2),
+            description="ACCT XFER",
+            merchant=merchant,
+            amount=Decimal("-200.00"),
+            counts_as_spending=False,
+            raw={},
         )
 
+    def _chart_payload(self, response: HttpResponse) -> dict[str, Any]:
+        """Extract the json_script day payload from the rendered page."""
+        match = re.search(
+            r'<script id="day-chart-data" type="application/json">(.*?)</script>',
+            response.content.decode(),
+            re.S,
+        )
+        assert match is not None
+        return json.loads(match.group(1))
+
+    def test_month_page_renders_total_count_and_back_link(self) -> None:
+        # Plain and zero-padded months resolve to the same page via the
+        # <int:> converter.
+        for url in ("/2026/7/", "/2026/07/"):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200)
+        response = self.client.get("/2026/7/")
+        self.assertContains(response, "July 2026")
+        # Only the spend shows: the transfer must not appear anywhere.
+        self.assertContains(response, "$10.50")
+        self.assertNotContains(response, "ACCT XFER")
+        self.assertContains(response, 'href="/"')
+
+    def test_month_page_404_for_empty_and_out_of_range_months(self) -> None:
+        self.assertEqual(self.client.get("/2026/8/").status_code, 404)
+        self.assertEqual(self.client.get("/2026/13/").status_code, 404)
+
+    def test_day_payload_sorted_descending_with_refunds_last(self) -> None:
+        market = Merchant.objects.create(name="MARKET")
+        refunds = Merchant.objects.create(name="REFUNDS")
+        Transaction.objects.create(
+            date=date(2026, 7, 1),
+            description="MARKET",
+            merchant=market,
+            amount=Decimal("-12.00"),
+            counts_as_spending=True,
+            raw={},
+        )
+        # A refund is a positive CSV amount, so its spend figure is negative.
+        Transaction.objects.create(
+            date=date(2026, 7, 1),
+            description="REFUNDS",
+            merchant=refunds,
+            amount=Decimal("5.00"),
+            counts_as_spending=True,
+            raw={},
+        )
+        payload = self._chart_payload(self.client.get("/2026/7/"))
+        self.assertEqual(payload["year"], 2026)
+        self.assertEqual(payload["month"], 7)
+        self.assertEqual(
+            payload["days"]["1"]["txns"],
+            [["MARKET", 12.0], ["SOME MERCHANT", 10.5], ["REFUNDS", -5.0]],
+        )
+        self.assertEqual(payload["days"]["1"]["total"], 17.5)
+        self.assertEqual(payload["days"]["1"]["count"], 3)
+        # Total pinning: the header month total is the sum of the day totals
+        # (12 + 10.5 - 5), even with the refund dragging it down.
+        response = self.client.get("/2026/7/")
+        self.assertContains(response, "$17.50")
+
+    def test_month_sidebar_escapes_merchant_names(self) -> None:
+        evil = Merchant.objects.create(name="<b>EVIL</b>")
+        Transaction.objects.create(
+            date=date(2026, 7, 3),
+            description="raw description",
+            merchant=evil,
+            amount=Decimal("-5.00"),
+            counts_as_spending=True,
+            raw={},
+        )
+        response = self.client.get("/2026/7/")
+        self.assertContains(response, "&lt;b&gt;EVIL&lt;/b&gt;")
+        self.assertNotContains(response, "<b>EVIL</b>")
+
+
+class AggregationTests(TestCase):
     def test_tag_totals_count_multi_tag_merchants_fully(self) -> None:
         transactions = [
             (date(2026, 7, 1), "CAFE", Decimal("10.00")),
@@ -174,9 +253,9 @@ class BuildTreeTests(TestCase):
         self.assertEqual(
             series,
             [
-                ("Jan 2026", 10.0),
-                ("Feb 2026", 0.0),
-                ("Mar 2026", 6.0),
+                ("Jan 2026", 10.0, "/2026/1/"),
+                ("Feb 2026", 0.0, "/2026/2/"),
+                ("Mar 2026", 6.0, "/2026/3/"),
             ],
         )
 

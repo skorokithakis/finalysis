@@ -5,32 +5,28 @@
 {% block title %}{% trans "Spending report" %}{% endblock %}
 
 {% block content %}
-<div class="card">
-    <h1>Spending report</h1>
-    <div class="summary-header">
-        <div class="summary-item">
-            <span class="summary-label">Grand total</span>
-            <span class="summary-value">{{ grand_total }}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Date range</span>
-            <span class="summary-value" style="font-size:0.95em;">{{ date_range }}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Avg / month ({{ month_count }} mo)</span>
-            <span class="summary-value">{{ avg_monthly }}</span>
-        </div>
-    </div>
-
-    {{ chart_data|json_script:"monthly-chart-data" }}
-    <div class="chart-container">
-        <canvas id="monthly-chart"></canvas>
-    </div>
-</div>
-
 <div class="main-area">
     <div class="card">
-        {{ tree_html|safe }}
+        <h1>Spending report</h1>
+        <div class="summary-header">
+            <div class="summary-item">
+                <span class="summary-label">Grand total</span>
+                <span class="summary-value">{{ grand_total }}</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Date range</span>
+                <span class="summary-value" style="font-size:0.95em;">{{ date_range }}</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Avg / month ({{ month_count }} mo)</span>
+                <span class="summary-value">{{ avg_monthly }}</span>
+            </div>
+        </div>
+
+        {{ chart_data|json_script:"monthly-chart-data" }}
+        <div class="chart-container">
+            <canvas id="monthly-chart"></canvas>
+        </div>
     </div>
     <aside class="sidebar">
         {% if sidebar_merchants_html %}
@@ -54,10 +50,26 @@
                 label: "Spending",
                 data: series.map((point) => point[1]),
                 backgroundColor: "#4a90d9",
+                // Near-zero bars keep a 3px sliver, so they stay clickable.
+                minBarLength: 3,
             }],
         },
         options: {
             maintainAspectRatio: false,
+            onClick: (event, elements, chart) => {
+                // intersect: true makes background clicks return no elements,
+                // so only an actual bar click navigates.
+                const hits = chart.getElementsAtEventForMode(event, "nearest", { intersect: true }, true);
+                if (hits.length) {
+                    // The URL comes from the server payload; never build it
+                    // from the label client-side.
+                    window.location.href = series[hits[0].index][2];
+                }
+            },
+            onHover: (event, elements) => {
+                // Bars are clickable, so the cursor over them should say so.
+                event.native.target.style.cursor = elements.length ? "pointer" : "default";
+            },
             plugins: {
                 tooltip: {
                     callbacks: {
