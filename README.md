@@ -74,4 +74,4 @@ You can also specify any secret keys or settings in a `local_settings.py`, which
 
 ## License
 
-Copyright © Stavros Korokithakis. Licensed under the [MIT license](/LICENSE).
+Copyright © Stavros Korokithakis. Licensed under the GNU AGPL.
