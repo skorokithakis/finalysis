@@ -1,14 +1,14 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from djangoql.admin import DjangoQLSearchMixin
 
-from .models import SomeModel
+from .models import Transaction
 from .models import User
 
 admin.site.register(User, UserAdmin)
 
 
-@admin.register(SomeModel)
-class SomeModelAdmin(DjangoQLSearchMixin, admin.ModelAdmin):
-    list_display = ["user", "timestamp", "message"]
-    list_filter = ("timestamp",)
+@admin.register(Transaction)
+class TransactionAdmin(admin.ModelAdmin):
+    list_display = ["date", "description", "amount", "counts_as_spending"]
+    list_filter = ["counts_as_spending", "date"]
+    search_fields = ["description"]

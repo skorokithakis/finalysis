@@ -2,8 +2,26 @@
 
 {% load i18n %}
 
-{% block title %}{% trans "Home" %}{% endblock %}
+{% block title %}{% trans "Spending report" %}{% endblock %}
 
 {% block content %}
-<p>{% trans "Hello!" %}</p>
+<div class="card">
+    <h1>Spending report</h1>
+    <div class="summary-header">
+        <div class="summary-item">
+            <span class="summary-label">Grand total</span>
+            <span class="summary-value">{{ grand_total }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Date range</span>
+            <span class="summary-value" style="font-size:0.95em;">{{ date_range }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Avg / month ({{ month_count }} mo)</span>
+            <span class="summary-value">{{ avg_monthly }}</span>
+        </div>
+    </div>
+
+    {{ tree_html|safe }}
+</div>
 {% endblock %}

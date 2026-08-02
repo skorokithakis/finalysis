@@ -49,6 +49,7 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+report.xml
 *.cover
 *.py,cover
 .hypothesis/
@@ -178,3 +179,5 @@ pyrightconfig.json
 *.csv
 *.db
 *.sqlite3
+.tickets/
+.envrc

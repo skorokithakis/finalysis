@@ -1,1 +1,200 @@
-body {}
+/* Styles for the spending drill-down report (main/index view), ported from
+   the legacy finalysis.py PAGE constant. */
+* { box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    background: #f0f2f5;
+    color: #1a1a2e;
+    padding: 2em;
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+}
+.card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 1.5em 2em;
+    margin-bottom: 1em;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+    /* The card is the grid container for the drilldown rows */
+}
+h1 {
+    font-size: 1.35em;
+    font-weight: 600;
+    margin: 0 0 0.6em;
+    color: #111;
+}
+.summary-header {
+    display: flex;
+    gap: 2.5em;
+    flex-wrap: wrap;
+    padding-bottom: 0.8em;
+    border-bottom: 1px solid #e8eaed;
+    margin-bottom: 0.6em;
+}
+.summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15em;
+}
+.summary-label {
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #888;
+}
+.summary-value {
+    font-size: 1.15em;
+    font-weight: 600;
+}
+
+/* ==== details / summary reset and grid rows ==== */
+
+details {
+    display: block;
+    border-left: 1px solid transparent;
+    transition: border-color 0.15s;
+}
+details[open] {
+    border-left-color: #e5e7eb;
+}
+details[open] > details {
+    /* Nested open details also show their border */
+    border-left-color: #e5e7eb;
+}
+
+summary {
+    display: grid;
+    grid-template-columns: 1.2em 1fr 7em minmax(0, 35%);
+    align-items: center;
+    gap: 0.4em;
+    cursor: pointer;
+    padding: 0.25em 0.4em;
+    border-radius: 4px;
+    list-style: none;
+    outline: none;
+}
+summary::-webkit-details-marker { display: none; }
+summary::before {
+    content: "▸";
+    color: #999;
+    font-size: 0.8em;
+    text-align: center;
+    transition: transform 0.15s;
+    grid-column: 1;
+    grid-row: 1;
+}
+details[open] > summary::before {
+    content: "▾";
+}
+summary:hover { background: #f6f8fb; }
+
+/* typographic hierarchy */
+.row-year .row-label { font-size: 1.1em; font-weight: 600; }
+.row-quarter .row-label { font-size: 1.05em; font-weight: 600; }
+.row-month .row-label { font-weight: 500; }
+.row-day .row-label { font-size: 0.93em; color: #444; }
+.refund-row .row-label { color: #2e7d32; }
+
+.row-label {
+    grid-column: 2;
+    grid-row: 1;
+    padding-left: calc(var(--depth, 0) * 1.5rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.row-amount {
+    grid-column: 3;
+    grid-row: 1;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.bar-track {
+    grid-column: 4;
+    grid-row: 1;
+    height: 0.7em;
+    min-width: 0;
+    background: #eef1f5;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.bar {
+    display: block;
+    height: 100%;
+    background: #4a90d9;
+    border-radius: 4px;
+}
+
+/* ==== top merchants (inside month, above days) ==== */
+.top-merchants {
+    margin: 0.4em 0 0.6em;
+    padding: 0.6em 0.8em;
+    background: #f8f9fb;
+    border-radius: 8px;
+    border: 1px solid #edf0f4;
+}
+.top-merchants-title {
+    font-size: 0.78em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #999;
+    margin-bottom: 0.5em;
+}
+.merchant-row {
+    display: grid;
+    grid-template-columns: 1fr auto 7em minmax(0, 30%);
+    align-items: center;
+    gap: 0.4em;
+    padding: 0.12em 0.3em;
+    font-size: 0.88em;
+    border-radius: 3px;
+}
+.merchant-row:hover { background: #eef1f7; }
+.merchant-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.merchant-count {
+    width: 4ch;
+    text-align: center;
+    color: #aaa;
+    font-size: 0.85em;
+    flex-shrink: 0;
+}
+.merchant-amount {
+    text-align: right;
+    flex-shrink: 0;
+}
+
+/* ==== transaction list inside expanded days ==== */
+.txn-list {
+    margin: 0.2em 0 0.4em;
+}
+.txn-row {
+    display: grid;
+    grid-template-columns: 1fr 7em;
+    align-items: baseline;
+    gap: 0.4em;
+    padding: 0.15em 0.4em;
+    font-size: 0.88em;
+    color: #555;
+    border-radius: 3px;
+}
+.txn-row:nth-child(even) { background: #fafbfc; }
+.txn-row:hover { background: #f0f4ff; }
+.txn-desc {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    padding-left: calc(var(--depth, 0) * 1.5rem + 1.2em);
+}
+.txn-amount {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.txn-amount.refund { color: #2e7d32; }

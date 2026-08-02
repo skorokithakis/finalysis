@@ -26,6 +26,8 @@ dev = [
     "pudb",
     "django-stubs",
 ]
+
+[tool.uv]
 package = false
 
 [build-system]
