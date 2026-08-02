@@ -1,4 +1,7 @@
+import re
+
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -11,6 +14,39 @@ class Tag(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class NormalizationRule(models.Model):
+    # A Python regex applied to transaction descriptions at import time.
+    search = models.CharField(max_length=500)
+    # re.sub replacement string; backreferences like \1 are allowed.
+    replace = models.CharField(max_length=500, blank=True, default="")
+    # Rules apply in ascending order, one after the other.
+    order = models.IntegerField()
+
+    class Meta:
+        ordering = ["order", "pk"]
+
+    def __str__(self) -> str:
+        return self.search
+
+    def clean(self) -> None:
+        # Reject bad patterns at admin save time, not mid-import.
+        try:
+            compiled = re.compile(self.search)
+        except re.error as error:
+            raise ValidationError(
+                {"search": f"Invalid regular expression: {error}"}
+            ) from error
+        # Dry-run the replacement template too: a broken backreference like
+        # \2 with a single-group pattern only fails when sub() actually runs,
+        # which would crash mid-import instead of here.
+        try:
+            compiled.sub(self.replace, "")
+        except re.error as error:
+            raise ValidationError(
+                {"replace": f"Invalid replacement: {error}"}
+            ) from error
 
 
 class Merchant(models.Model):

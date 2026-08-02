@@ -4,12 +4,19 @@ from django.db.models import QuerySet
 from django.http import HttpRequest
 
 from .models import Merchant
+from .models import NormalizationRule
 from .models import Tag
 from .models import Transaction
 from .models import User
 
 admin.site.register(User, UserAdmin)
 admin.site.register(Tag)
+
+
+@admin.register(NormalizationRule)
+class NormalizationRuleAdmin(admin.ModelAdmin):
+    list_display = ["order", "search", "replace"]
+    ordering = ["order"]
 
 
 class MerchantTagFilter(admin.SimpleListFilter):

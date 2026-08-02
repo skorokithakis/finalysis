@@ -7,6 +7,7 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from main.models import Merchant
+from main.models import NormalizationRule
 from main.models import Tag
 from main.models import Transaction
 from main.views import build_tree
@@ -172,3 +173,37 @@ class ImportTransactionsCommandTests(TestCase):
             call_command("import_transactions", csv_path, wipe=True)
             self.assertEqual(Transaction.objects.count(), 2)
             self.assertEqual(Merchant.objects.count(), first_merchant_count)
+
+    def test_seeded_rules_strip_fx_and_date_tails(self) -> None:
+        # The seeded rules must produce the same names the hardcoded regexes
+        # did: an FX tail (which in the real CSV also carries a date before
+        # the FX block, so both rules apply in order) and a fused
+        # date/branch tail both clean down to the plain merchant name.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = os.path.join(tmp_dir, "transactions.csv")
+            with open(csv_path, "w", newline="") as handle:
+                handle.write(
+                    _CSV_HEADER
+                    + 'DEBIT,07/01/2026,"MASOUTIS SIVIRI KASSANDRA  07/29 Euro 13.02 X 1.14 (EXCHG RTE)",-14.85,DEBIT_CARD,85.15,\n'
+                    + 'DEBIT,07/02/2026,"  COFFEE SHOP  07/01KASSANDRA  ",-4.00,DEBIT_CARD,96.00,\n'
+                )
+            call_command("import_transactions", csv_path)
+        names = {txn.merchant.name for txn in Transaction.objects.all()}
+        self.assertEqual(names, {"MASOUTIS SIVIRI KASSANDRA", "COFFEE SHOP"})
+
+    def test_custom_rule_with_backreference_is_applied(self) -> None:
+        NormalizationRule.objects.create(
+            order=30,
+            search=r"(COFFEE) SHOP",
+            replace=r"\1 HOUSE",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = os.path.join(tmp_dir, "transactions.csv")
+            with open(csv_path, "w", newline="") as handle:
+                handle.write(
+                    _CSV_HEADER
+                    + "DEBIT,07/02/2026,COFFEE SHOP,-4.00,DEBIT_CARD,96.00,\n"
+                )
+            call_command("import_transactions", csv_path)
+        txn = Transaction.objects.get()
+        self.assertEqual(txn.merchant.name, "COFFEE HOUSE")

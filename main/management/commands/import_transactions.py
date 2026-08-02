@@ -11,6 +11,7 @@ from django.core.management.base import BaseCommand
 from main.models import Merchant
 from main.models import Transaction
 from main.services import clean_description
+from main.services import load_rules
 
 # Transfers are imported like everything else; they just don't count towards
 # spending, mirroring the EXCLUDED_TYPES rule in finalysis.py.
@@ -32,12 +33,15 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         if options["wipe"]:
             Transaction.objects.all().delete()
+        # Rules are read from the DB once per run; recompiling per row would be
+        # wasted work on thousands of transactions.
+        rules = load_rules()
         transactions: list[Transaction] = []
         with open(options["csv_path"], newline="") as handle:
             reader = csv.DictReader(handle)
             for row in reader:
                 merchant, _ = Merchant.objects.get_or_create(
-                    name=clean_description(row["Description"])
+                    name=clean_description(row["Description"], rules)
                 )
                 transactions.append(
                     Transaction(
