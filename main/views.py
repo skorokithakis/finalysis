@@ -1,14 +1,14 @@
 """The index view: the spending drill-down report.
 
 Drill-down: year -> quarter -> month -> day (with individual transactions).
-Months additionally show a top-10 merchants list above the day rows.
+Months additionally show a top-10 merchants list and a spending-by-tag
+breakdown above the day rows.
 
 Spending rule: sum of -amount for rows where counts_as_spending is true; the
 DB stores amounts signed as in the source CSV, so a spend is a negative
 amount. CREDIT rows are not imported as spending and are ignored entirely.
 """
 
-import re
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -17,34 +17,24 @@ from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render
 from django.utils.html import escape
 
+from main.models import Merchant
 from main.models import Transaction
 
-# Strip trailing currency+amount+rate+EXCHG RTE block.
-_FX_TAIL = re.compile(
-    r"\s+(?:Euro|Pound\s+Sterl)\s*\d+\.\d+\s+X\s+\d+\.\d+\s+\(EXCHG RTE\)$"
-)
-# Strip everything from a trailing MM/DD date to end of string
-# (handles fused branch names like "07/17KASSANDRE" or "07/13SOFOULI B").
-_DATE_TAIL = re.compile(r"\s+\d{2}/\d{2}.*$")
-# Collapse runs of whitespace into a single space.
-_WHITESPACE = re.compile(r"\s+")
-
-# A transaction row as the report consumes it: posting date, cleaned
-# description, and spend amount (positive means money spent).
+# A transaction row as the report consumes it: posting date, merchant name
+# (already cleaned at import), and spend amount (positive means money spent).
 TransactionRow = tuple[date, str, Decimal]
 
 # The tree nests year -> quarter -> month; a month carries "total", "days",
-# and "merchants" sub-dicts (see build_tree).
+# "merchants", and "tags" sub-dicts (see build_tree).
 MonthData = dict[str, Any]
 QuarterData = dict[int, MonthData]
 Tree = dict[int, dict[str, QuarterData]]
 
-
-def clean_description(raw: str) -> str:
-    """Strip FX tail and trailing date, collapse whitespace."""
-    desc = _FX_TAIL.sub("", raw)
-    desc = _DATE_TAIL.sub("", desc)
-    return _WHITESPACE.sub(" ", desc).strip()
+# Keys of a month's "tags" sub-dict: a real tag name, or None as the sentinel
+# for the untagged bucket. None is used rather than a string because a
+# user-created tag literally named "untagged" would silently merge into a
+# string-keyed bucket; the "untagged" label is substituted only at render time.
+TagKey = None | str
 
 
 def quarter_label(month: int) -> str:
@@ -52,8 +42,28 @@ def quarter_label(month: int) -> str:
     return f"Q{(month - 1) // 3 + 1}"
 
 
-def build_tree(transactions: list[TransactionRow]) -> Tree:
+def merchant_tags_map() -> dict[str, list[str]]:
+    """Map merchant names to their tag names, in one query over the M2M join.
+
+    Merchants without tags are absent from the map; build_tree sends them to
+    the untagged bucket.
+    """
+    tags_by_merchant: dict[str, list[str]] = {}
+    for merchant_name, tag_name in Merchant.objects.filter(
+        tags__isnull=False
+    ).values_list("name", "tags__name"):
+        tags_by_merchant.setdefault(merchant_name, []).append(tag_name)
+    return tags_by_merchant
+
+
+def build_tree(
+    transactions: list[TransactionRow], merchant_tags: dict[str, list[str]]
+) -> Tree:
     """Group transactions into a nested tree with daily totals and merchant data.
+
+    Each spending transaction counts fully toward every tag of its merchant,
+    and toward the untagged bucket when its merchant has no tags, so per-tag
+    month totals may exceed the month total; that is accepted.
 
     Returns:
       {year: {quarter_label: {
@@ -62,27 +72,32 @@ def build_tree(transactions: list[TransactionRow]) -> Tree:
               "days": {
                   day_num: {
                       "total": Decimal,
-                      "txns": [(desc, amount), ...],
+                      "txns": [(merchant_name, amount), ...],
                   }
               },
-              "merchants": {desc: {"total": Decimal, "count": int}},
+              "merchants": {name: {"total": Decimal, "count": int}},
+              "tags": {tag | None: {"total": Decimal, "count": int}},
           }
       }}}
     """
     tree: Tree = {}
-    for d, desc, amount in transactions:
+    for d, merchant, amount in transactions:
         year = tree.setdefault(d.year, {})
         quarter = year.setdefault(quarter_label(d.month), {})
         month = quarter.setdefault(
-            d.month, {"total": Decimal("0"), "days": {}, "merchants": {}}
+            d.month, {"total": Decimal("0"), "days": {}, "merchants": {}, "tags": {}}
         )
         month["total"] += amount
         day = month["days"].setdefault(d.day, {"total": Decimal("0"), "txns": []})
         day["total"] += amount
-        day["txns"].append((desc, amount))
-        m = month["merchants"].setdefault(desc, {"total": Decimal("0"), "count": 0})
+        day["txns"].append((merchant, amount))
+        m = month["merchants"].setdefault(merchant, {"total": Decimal("0"), "count": 0})
         m["total"] += amount
         m["count"] += 1
+        for tag in merchant_tags.get(merchant, [None]):
+            t = month["tags"].setdefault(tag, {"total": Decimal("0"), "count": 0})
+            t["total"] += amount
+            t["count"] += 1
     return tree
 
 
@@ -130,8 +145,8 @@ def render_tree_html(tree: Tree) -> str:
     """Walk the tree and produce nested <details>/<summary> HTML.
 
     The return value is injected into the template with |safe, so every
-    non-literal interpolation (transaction and merchant descriptions) must go
-    through escape(); anything that slips through unescaped is an XSS hole.
+    non-literal interpolation (merchant and tag names) must go through
+    escape(); anything that slips through unescaped is an XSS hole.
     """
     yt = _year_totals(tree)
     max_year = max(yt.values()) if yt else Decimal("0")
@@ -202,6 +217,32 @@ def render_tree_html(tree: Tree) -> str:
                         )
                     parts.append("</div>")
 
+                # --- spending by tag for this month (above day rows) ---
+                tags_dict = m_data["tags"]
+                tags_sorted = sorted(
+                    tags_dict.items(), key=lambda kv: kv[1]["total"], reverse=True
+                )
+                if tags_sorted:
+                    max_tag = max(d["total"] for _, d in tags_sorted)
+                    parts.append('<div class="top-merchants">')
+                    parts.append(
+                        '<div class="top-merchants-title">Spending by tag</div>'
+                    )
+                    for tag, data in tags_sorted:
+                        # The untagged bucket lives under the None sentinel;
+                        # the label is substituted here, at render time.
+                        tag_label = "untagged" if tag is None else tag
+                        tag_bar = bar_html(data["total"], max_tag)
+                        parts.append(
+                            f'<div class="merchant-row">'
+                            f'<span class="merchant-name" title="{escape(tag_label)}">{escape(tag_label)}</span>'
+                            f'<span class="merchant-count">×{data["count"]}</span>'
+                            f'<span class="merchant-amount">{fmt(data["total"])}</span>'
+                            f"{tag_bar}"
+                            f"</div>"
+                        )
+                    parts.append("</div>")
+
                 # --- day rows (expandable, with transactions) ---
                 days_dict = m_data["days"]
                 max_day = (
@@ -227,11 +268,11 @@ def render_tree_html(tree: Tree) -> str:
                     # Transaction list inside the expanded day.
                     if day_data["txns"]:
                         parts.append('<div class="txn-list">')
-                        for desc, amt in day_data["txns"]:
+                        for name, amt in day_data["txns"]:
                             txn_css = "txn-amount refund" if amt < 0 else "txn-amount"
                             parts.append(
                                 f'<div class="txn-row">'
-                                f'<span class="txn-desc" title="{escape(desc)}">{escape(desc)}</span>'
+                                f'<span class="txn-desc" title="{escape(name)}">{escape(name)}</span>'
                                 f'<span class="{txn_css}">{fmt(amt)}</span>'
                                 f"</div>"
                             )
@@ -246,13 +287,19 @@ def render_tree_html(tree: Tree) -> str:
 
 
 def index(request: HttpRequest) -> HttpResponse:
+    txns = Transaction.objects.filter(counts_as_spending=True).select_related(
+        "merchant"
+    )
     transactions = [
         # The DB stores amounts signed as in the CSV, so a spend is a negative
         # amount; negate to get the positive spend figure the report displays.
-        (t.date, clean_description(t.description), -t.amount)
-        for t in Transaction.objects.filter(counts_as_spending=True)
+        # The merchant name is used as-is: it is already cleaned at import, so
+        # the report agrees with the merchant table even if cleaning rules
+        # change later.
+        (t.date, t.merchant.name, -t.amount)
+        for t in txns
     ]
-    tree = build_tree(transactions)
+    tree = build_tree(transactions, merchant_tags_map())
 
     # Summary header data.
     grand_total = sum(t[2] for t in transactions)
